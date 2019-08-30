@@ -1,0 +1,1598 @@
+/************************************************************	/************************************************************
+ * Sherman Lee						      |	 Copyright (c) 2001, 2017, Oracle and/or its affiliates. All 
+ * 05/16/2019						      |
+ * Oracle Solutions Hub Santa Monica			      |	  Program description:
+							      >
+							      >	  User exit example for Windows NT and Unix.  This example us
+							      >	  TCUSTMER and TCUSTORD tables, which can be created and mani
+							      >	  the demo*.sql scripts included with the ER release.
+							      >
+							      >	  Change History:
+							      >	  05/07/17 - yoshbaba
+							      >	   Allows hidden column metadata attribute support.
+							      >
+							      >	  08/14/16 - yoshbaba
+							      >	   Updated MAXDBOBJTYPE to MAXDBOBJTYPE_122. Userexit does no
+							      >	   package and procedure yet.
+							      >
+							      >	  03/11/15 - yoshbaba
+							      >	   Added event record support (database and table metadata re
+							      >
+							      >	  03/07/2013 - ralekra
+							      >	   Bug-13251946 Callback function GET_STATISTICS requires tab
+							      >	   be fully qualified.
+							      >
+							      >	  01/18/13 - ralekra
+							      >	   BUG-16176057 Enhance DDL metadata retrieval
+							      >
+							      >	  17/01/13 - ralekra 
+							      >	   BUG-16091281  Array dbObjTyp needs MAXDBOBJTYPE number of 
+							      >	  01/16/13 - ralekra
+							      >	   BUG-16171943 Included DDl usage and enhanced DML metadata 
+							      >
+							      >	  04/15/10 - TAS
+							      >	   BUG-9572108 Added #include for OSS types.
+							      >
+							      >	  06/11/09 - SS
+							      >	   OS-9026 Rectifying the check-in errors of UserExit modules
+							      >
+							      >	  04/21/09 - TAS
+							      >	   OS-8962 Corrected #ifdef for AIX
+							      >
+							      >	  09/15/08 - TAS
+							      >	   OS-3698
+							      >	   Added truncates to stats output.
+							      >	   No ticket Corrected tbl compare to drop owner.
+							      >
+							      >	  08/09/08 - TAS
+							      >	   OS-5297, corrected isprint issue. Compile issue for MVS
+							      >
+							      >	  08/07/08 - TAS
+							      >	   OS-5297 Cleaned up #defines for WIN32 for .net and before.
+							      >
+							      >	  06/13/08 - TAS
+							      >	   OS-5297 Added includes for linux.
+							      >
+							      >	  07/30/07 - TAS
+							      >	   Added disabled warns for sprintf, vsprintf NT VS 2005.
+							      >	   Callback examples for tokens, position, and printing to re
+							      >
+							      >	  03/22/07 - SMB
+							      >	   Add support for column lengths up to 64K bytes.
+							      >
+							      >	  12/15/06 - TAS
+							      >	   No Ticket, correct stack overflow on NT from large row cha
+							      >
+							      >	  11/30/06 - CP
+							      >	    FP #13489 - Support new callback functions: GET_TABLE_MET
+							      >	    GET_COL_METADATA_FROM_INDEX, GET_COL_METADATA_FROM_NAME.
+							      >
+							      >	  02/12/06 - SRC
+							      >	    Support new callback functions:  FETCH_CURRENT_RECORD_WIT
+							      >	    FETCH_CURRENT_RECORD, and OUTPUT_MESSAGE_TO_REPORT.  Fetc
+							      >	    supported in replicat and only if a mapped target buffer 
+							      >	    Fetch the current record by key from the target database.
+							      >	    existing callbacks to expose the data values for the fetc
+							      >	    Messages are output to the report file and/or console bas
+							      >	    existing reporting logic.
+							      >
+							      >	  05/15/01 - SRC
+							      >	    Initial revision.
+							      >
+*************************************************************	*************************************************************
+
+#include <stdio.h>						#include <stdio.h>
+
+#ifdef WIN32							#ifdef WIN32
+  #define  int8_t     signed char				  #define  int8_t     signed char
+  #define  int16_t    short					  #define  int16_t    short
+  #define  int32_t    long					  #define  int32_t    long
+  #define  int64_t    __int64					  #define  int64_t    __int64
+  #define  uint8_t    unsigned char				  #define  uint8_t    unsigned char
+  #define  uint16_t   unsigned short				  #define  uint16_t   unsigned short
+  #define  uint32_t   unsigned long				  #define  uint32_t   unsigned long
+  #define  uint64_t   unsigned __int64				  #define  uint64_t   unsigned __int64
+  #include <windows.h>						  #include <windows.h>
+  #if (_MSC_VER>=1400)						  #if (_MSC_VER>=1400)
+    #pragma warning(disable:4018)				    #pragma warning(disable:4018)
+    #pragma warning(disable:4996)				    #pragma warning(disable:4996)
+  #endif							  #endif
+#else								#else
+  #if defined(__linux__)					  #if defined(__linux__)
+    #include <stdint.h>						    #include <stdint.h>
+    #include <stdarg.h>						    #include <stdarg.h>
+  #endif							  #endif
+
+  #if defined(__MVS__)						  #if defined(__MVS__)
+    #include <stdarg.h>						    #include <stdarg.h>
+    #include <varargs.h>					    #include <varargs.h>
+    #include <inttypes.h>					    #include <inttypes.h>
+  #endif							  #endif
+
+  #if !defined(__MVS__) && !defined(__linux__)			  #if !defined(__MVS__) && !defined(__linux__)
+     #include <stdarg.h>					     #include <stdarg.h>
+  #endif							  #endif
+
+  #if defined (_OSS_HOST)					  #if defined (_OSS_HOST)
+     #include <stdint.h>					     #include <stdint.h>
+  #endif							  #endif
+
+  #include <string.h>						  #include <string.h>
+  #include <sys/types.h>					  #include <sys/types.h>
+  #include <stdlib.h>						  #include <stdlib.h>
+  #include <ctype.h>						  #include <ctype.h>
+#endif								#endif
+
+#include "usrdecs.h"						#include "usrdecs.h"
+
+/* ER callback routine */					/* ER callback routine */
+#ifndef WIN32							#ifndef WIN32
+void ERCALLBACK(ercallback_function_codes function_code,	void ERCALLBACK(ercallback_function_codes function_code,
+                void *buf, short *presult_code);		                void *buf, short *presult_code);
+#else								#else
+typedef void (*FPERCALLBACK)(ercallback_function_codes functi	typedef void (*FPERCALLBACK)(ercallback_function_codes functi
+                             void *buf, short *presult_code);	                             void *buf, short *presult_code);
+
+HINSTANCE hEXE; /* EXE handle */				HINSTANCE hEXE; /* EXE handle */
+FPERCALLBACK fp_ERCallback; /* Callback function pointer */	FPERCALLBACK fp_ERCallback; /* Callback function pointer */
+
+/************************************************************	/************************************************************
+  Open the ER callback function explicitly.			  Open the ER callback function explicitly.
+*************************************************************	*************************************************************
+short open_callback (char *executable_name,			short open_callback (char *executable_name,
+                     char *function_name)			                     char *function_name)
+{								{
+    printf ("Opening callback for %s, %s.\n",			    printf ("Opening callback for %s, %s.\n",
+            executable_name,					            executable_name,
+            function_name);					            function_name);
+
+    hEXE = LoadLibrary (executable_name);			    hEXE = LoadLibrary (executable_name);
+    if (hEXE != NULL)						    if (hEXE != NULL)
+    {								    {
+        /* Function should always be exported in uppercase, s	        /* Function should always be exported in uppercase, s
+           GetProcAddress converts to uppercase then does a c	           GetProcAddress converts to uppercase then does a c
+           search.  Don't use /NOIGNORE (/NOI) linker option.	           search.  Don't use /NOIGNORE (/NOI) linker option.
+        fp_ERCallback = (FPERCALLBACK)GetProcAddress(hEXE, fu	        fp_ERCallback = (FPERCALLBACK)GetProcAddress(hEXE, fu
+
+        if (!fp_ERCallback)					        if (!fp_ERCallback)
+        {							        {
+            FreeLibrary (hEXE);					            FreeLibrary (hEXE);
+            return 0;						            return 0;
+        }							        }
+    }								    }
+    else							    else
+        return 0;						        return 0;
+
+    return 1;							    return 1;
+}								}
+#endif								#endif
+
+/************************************************************	/************************************************************
+  Close the callback function.					  Close the callback function.
+*************************************************************	*************************************************************
+void close_callback (void)					void close_callback (void)
+{								{
+#ifdef WIN32							#ifdef WIN32
+    FreeLibrary (hEXE);						    FreeLibrary (hEXE);
+#endif								#endif
+}								}
+
+/************************************************************	/************************************************************
+  Call the callback function.					  Call the callback function.
+*************************************************************	*************************************************************
+void call_callback (ercallback_function_codes function_code,	void call_callback (ercallback_function_codes function_code,
+                    void *buf, short *result_code)		                    void *buf, short *result_code)
+{								{
+#ifdef WIN32							#ifdef WIN32
+    fp_ERCallback (function_code, buf, result_code);		    fp_ERCallback (function_code, buf, result_code);
+#else								#else
+    ERCALLBACK (function_code, buf, result_code);		    ERCALLBACK (function_code, buf, result_code);
+#endif								#endif
+}								}
+
+/************************************************************	/************************************************************
+  Test for Little Endian machine format				  Test for Little Endian machine format
+*************************************************************	*************************************************************
+short LittleEndian( void )					short LittleEndian( void )
+{								{
+    short little_endian = 1;					    short little_endian = 1;
+    char *little_endian_c = (char *)&little_endian;		    char *little_endian_c = (char *)&little_endian;
+
+    if (*little_endian_c)					    if (*little_endian_c)
+    {								    {
+        return 1;						        return 1;
+    }								    }
+    return 0;							    return 0;
+}								}
+
+/************************************************************	/************************************************************
+  Reverse bytes for Little Endian/Big Endian			  Reverse bytes for Little Endian/Big Endian
+*************************************************************	*************************************************************
+void ReverseBytes (void *buf, short cnt)			void ReverseBytes (void *buf, short cnt)
+{								{
+    char *b = (char *)buf, *e = (char *)buf + cnt - 1;		    char *b = (char *)buf, *e = (char *)buf + cnt - 1;
+    char temp;							    char temp;
+
+    for (; b < e; b++, e--)					    for (; b < e; b++, e--)
+    {								    {
+        temp = *b;						        temp = *b;
+        *b = *e;						        *b = *e;
+        *e = temp;						        *e = temp;
+    }								    }
+}								}
+
+/************************************************************	/************************************************************
+  Output a message to the report file (or console).		  Output a message to the report file (or console).
+*************************************************************	*************************************************************
+void output_msg (char *msg,...)					void output_msg (char *msg,...)
+{								{
+    short result_code;						    short result_code;
+    char temp_msg[1000];					    char temp_msg[1000];
+
+    va_list args;						    va_list args;
+
+    va_start (args, msg);					    va_start (args, msg);
+
+    vsprintf (temp_msg, msg, args);				    vsprintf (temp_msg, msg, args);
+
+    va_end (args);						    va_end (args);
+
+    call_callback (OUTPUT_MESSAGE_TO_REPORT, temp_msg, &resul	    call_callback (OUTPUT_MESSAGE_TO_REPORT, temp_msg, &resul
+}								}
+
+short IsPrint(int c)						short IsPrint(int c)
+{								{
+    if (c != EOF) c = (unsigned char)c;				    if (c != EOF) c = (unsigned char)c;
+    return isprint(c) ? 1 : 0;					    return isprint(c) ? 1 : 0;
+}								}
+
+/************************************************************	/************************************************************
+  Display record information.					  Display record information.
+*************************************************************	*************************************************************
+short display_record (short source_or_target,			short display_record (short source_or_target,
+                      short ascii_or_internal)			                      short ascii_or_internal)
+{								{
+    int i, j, k;						    int i, j, k;
+    unsigned short col_len;					    unsigned short col_len;
+    char hex_str[31];						    char hex_str[31];
+    char ascii_str[11];						    char ascii_str[11];
+    char *a;							    char *a;
+    short result_code;						    short result_code;
+    table_def table;						    table_def table;
+    column_def column;						    column_def column;
+    env_value_def env_value; 					    env_value_def env_value; 
+
+    /* initialize */						    /* initialize */
+    memset (&env_value, 0, sizeof(env_value_def));		    memset (&env_value, 0, sizeof(env_value_def));
+    env_value.max_length = 500;					    env_value.max_length = 500;
+    env_value.buffer = (char *)malloc(500);			    env_value.buffer = (char *)malloc(500);
+    if (source_or_target == EXIT_FN_CURRENT_VAL)		    if (source_or_target == EXIT_FN_CURRENT_VAL)
+        env_value.source_or_target = EXIT_FN_TARGET_VAL;	        env_value.source_or_target = EXIT_FN_TARGET_VAL;
+    else							    else
+        env_value.source_or_target = source_or_target;		        env_value.source_or_target = source_or_target;
+
+    /* Get catalog name only */					    /* Get catalog name only */
+    call_callback (GET_CATALOG_NAME_ONLY, &env_value, &result	    call_callback (GET_CATALOG_NAME_ONLY, &env_value, &result
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving catalog name.\n",	        output_msg ("Error (%hd) retrieving catalog name.\n",
+        free (env_value.buffer);				        free (env_value.buffer);
+        return result_code;					        return result_code;
+    }								    }
+    output_msg ("Catalog name: %.*s \n", 			    output_msg ("Catalog name: %.*s \n", 
+                 env_value.actual_length, env_value.buffer);	                 env_value.actual_length, env_value.buffer);
+
+    /* Get schema name only */					    /* Get schema name only */
+    call_callback (GET_SCHEMA_NAME_ONLY, &env_value, &result_	    call_callback (GET_SCHEMA_NAME_ONLY, &env_value, &result_
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving catalog name.\n",	        output_msg ("Error (%hd) retrieving catalog name.\n",
+        free (env_value.buffer);				        free (env_value.buffer);
+        return result_code;					        return result_code;
+    }								    }
+    output_msg ("Schema  name: %.*s \n", 			    output_msg ("Schema  name: %.*s \n", 
+                 env_value.actual_length, env_value.buffer);	                 env_value.actual_length, env_value.buffer);
+
+    /* Get table name only */					    /* Get table name only */
+    call_callback (GET_TABLE_NAME_ONLY, &env_value, &result_c	    call_callback (GET_TABLE_NAME_ONLY, &env_value, &result_c
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving table name.\n", r	        output_msg ("Error (%hd) retrieving table name.\n", r
+        free (env_value.buffer);				        free (env_value.buffer);
+        return result_code;					        return result_code;
+    }								    }
+    output_msg ("Table   name: %.*s \n", 			    output_msg ("Table   name: %.*s \n", 
+                 env_value.actual_length, env_value.buffer);	                 env_value.actual_length, env_value.buffer);
+
+    /* Get fully qualified table name */			    /* Get fully qualified table name */
+    call_callback (GET_TABLE_NAME, &env_value, &result_code);	    call_callback (GET_TABLE_NAME, &env_value, &result_code);
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving fully qualified t	        output_msg ("Error (%hd) retrieving fully qualified t
+                     result_code);				                     result_code);
+        free (env_value.buffer);				        free (env_value.buffer);
+        return result_code;					        return result_code;
+    }								    }
+    output_msg ("Fully qualified table name: %.*s \n", 		    output_msg ("Fully qualified table name: %.*s \n", 
+                 env_value.actual_length, env_value.buffer);	                 env_value.actual_length, env_value.buffer);
+
+    /* Get table column information */				    /* Get table column information */
+    memset (&table, 0, sizeof(table_def));			    memset (&table, 0, sizeof(table_def));
+    if (source_or_target == EXIT_FN_CURRENT_VAL)		    if (source_or_target == EXIT_FN_CURRENT_VAL)
+        table.source_or_target = EXIT_FN_TARGET_VAL;		        table.source_or_target = EXIT_FN_TARGET_VAL;
+    else							    else
+        table.source_or_target = source_or_target;		        table.source_or_target = source_or_target;
+
+    call_callback (GET_TABLE_COLUMN_COUNT, &table, &result_co	    call_callback (GET_TABLE_COLUMN_COUNT, &table, &result_co
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving table column coun	        output_msg ("Error (%hd) retrieving table column coun
+                     result_code);				                     result_code);
+        free (env_value.buffer);				        free (env_value.buffer);
+        return result_code;					        return result_code;
+    }								    }
+    output_msg ("Number of columns: %hd\n", table.num_columns	    output_msg ("Number of columns: %hd\n", table.num_columns
+
+    memset(&column, 0, sizeof (column_def));			    memset(&column, 0, sizeof (column_def));
+    column.source_or_target = source_or_target;			    column.source_or_target = source_or_target;
+    column.column_value_mode = ascii_or_internal;		    column.column_value_mode = ascii_or_internal;
+    column.column_value = (char*)malloc(4000);			    column.column_value = (char*)malloc(4000);
+    column.max_value_length = 4000;				    column.max_value_length = 4000;
+
+    for (i = 0; i < table.num_columns; i++)			    for (i = 0; i < table.num_columns; i++)
+    {								    {
+        env_value.index = column.column_index = i;		        env_value.index = column.column_index = i;
+
+        /* get column name */					        /* get column name */
+        call_callback (GET_COLUMN_NAME_FROM_INDEX, &env_value	        call_callback (GET_COLUMN_NAME_FROM_INDEX, &env_value
+        if (result_code != EXIT_FN_RET_OK)			        if (result_code != EXIT_FN_RET_OK)
+        {							        {
+            output_msg ("Error (%hd) retrieving column name.\	            output_msg ("Error (%hd) retrieving column name.\
+            free (env_value.buffer);				            free (env_value.buffer);
+            free (column.column_value);				            free (column.column_value);
+            return result_code; 				            return result_code; 
+        }							        }
+        output_msg ("Column index (%d) = %.*s.\n",		        output_msg ("Column index (%d) = %.*s.\n",
+                    i, env_value.actual_length, env_value.buf	                    i, env_value.actual_length, env_value.buf
+
+        /* get column value */					        /* get column value */
+        call_callback (GET_COLUMN_VALUE_FROM_INDEX, &column, 	        call_callback (GET_COLUMN_VALUE_FROM_INDEX, &column, 
+        if (result_code != EXIT_FN_RET_OK &&			        if (result_code != EXIT_FN_RET_OK &&
+            result_code != EXIT_FN_RET_COLUMN_NOT_FOUND)	            result_code != EXIT_FN_RET_COLUMN_NOT_FOUND)
+        {							        {
+            output_msg ("Error (%hd) retrieving column value.	            output_msg ("Error (%hd) retrieving column value.
+            free (env_value.buffer);				            free (env_value.buffer);
+            free (column.column_value);				            free (column.column_value);
+            return result_code;					            return result_code;
+        }							        }
+
+        if (result_code == EXIT_FN_RET_COLUMN_NOT_FOUND)	        if (result_code == EXIT_FN_RET_COLUMN_NOT_FOUND)
+            output_msg ("Column not found in record.\n");	            output_msg ("Column not found in record.\n");
+        else							        else
+        if (column.null_value)					        if (column.null_value)
+        {							        {
+            if (column.is_hidden_column)			            if (column.is_hidden_column)
+                output_msg ("Hidden column value is NULL.\n")	                output_msg ("Hidden column value is NULL.\n")
+            else						            else
+                output_msg ("Column value is NULL.\n");		                output_msg ("Column value is NULL.\n");
+        }							        }
+        else							        else
+        {							        {
+            if (ascii_or_internal == EXIT_FN_ASCII_FORMAT)	            if (ascii_or_internal == EXIT_FN_ASCII_FORMAT)
+                output_msg ("Column value = %s.\n", column.co	                output_msg ("Column value = %s.\n", column.co
+            else						            else
+            {							            {
+                /* Ouput internal value in hex */		                /* Ouput internal value in hex */
+                if (column.is_hidden_column)			                if (column.is_hidden_column)
+                    output_msg ("Internal source hidden colum	                    output_msg ("Internal source hidden colum
+                else						                else
+                    output_msg ("Internal source column value	                    output_msg ("Internal source column value
+
+                col_len = column.actual_value_length;		                col_len = column.actual_value_length;
+
+                for (j = 0; j < col_len; j += 10)		                for (j = 0; j < col_len; j += 10)
+                {						                {
+                    for (a = column.column_value + j, k = 0;	                    for (a = column.column_value + j, k = 0;
+                         k < 10 && j + k < col_len;		                         k < 10 && j + k < col_len;
+                         a++, k++)				                         a++, k++)
+                    {						                    {
+                        ascii_str[k] =				                        ascii_str[k] =
+                            IsPrint (column.column_value[j + 	                            IsPrint (column.column_value[j + 
+                                     column.column_value[j + 	                                     column.column_value[j + 
+                        sprintf (hex_str + (k * 3), "%02X ",	                        sprintf (hex_str + (k * 3), "%02X ",
+                                 (unsigned char)column.column	                                 (unsigned char)column.column
+                    }						                    }
+                    ascii_str[k] = 0;				                    ascii_str[k] = 0;
+
+                    output_msg ("%5d:  %-10s   %-30s\n",	                    output_msg ("%5d:  %-10s   %-30s\n",
+                                j, ascii_str, hex_str);		                                j, ascii_str, hex_str);
+                }						                }
+            }							            }
+        }							        }
+    }								    }
+
+    free (env_value.buffer);					    free (env_value.buffer);
+    free (column.column_value);					    free (column.column_value);
+
+    return EXIT_FN_RET_OK;					    return EXIT_FN_RET_OK;
+}								}
+
+/************************************************************	/************************************************************
+  Display DDL information.					  Display DDL information.
+*************************************************************	*************************************************************
+short display_ddl (short source_or_target,			short display_ddl (short source_or_target,
+                      short ascii_or_internal)			                      short ascii_or_internal)
+{								{
+    short result_code;						    short result_code;
+    ddl_record_def ddl_rec;					    ddl_record_def ddl_rec;
+    env_value_def env_value;					    env_value_def env_value;
+
+    /* Setup DDL record structure */ 				    /* Setup DDL record structure */ 
+    memset (&ddl_rec, 0, sizeof(ddl_record_def));		    memset (&ddl_rec, 0, sizeof(ddl_record_def));
+    if (source_or_target == EXIT_FN_CURRENT_VAL)		    if (source_or_target == EXIT_FN_CURRENT_VAL)
+        ddl_rec.source_or_target = EXIT_FN_TARGET_VAL;		        ddl_rec.source_or_target = EXIT_FN_TARGET_VAL;
+    else							    else
+        ddl_rec.source_or_target = source_or_target;		        ddl_rec.source_or_target = source_or_target;
+
+    ddl_rec.ddl_type_max_length = 500;				    ddl_rec.ddl_type_max_length = 500;
+    ddl_rec.ddl_type = (char *)malloc(500);			    ddl_rec.ddl_type = (char *)malloc(500);
+
+    ddl_rec.object_type_max_length = 500;			    ddl_rec.object_type_max_length = 500;
+    ddl_rec.object_type = (char *)malloc(500);			    ddl_rec.object_type = (char *)malloc(500);
+
+    ddl_rec.object_max_length = 500;				    ddl_rec.object_max_length = 500;
+    ddl_rec.object_name = (char *)malloc(500);			    ddl_rec.object_name = (char *)malloc(500);
+
+    ddl_rec.owner_name = (char *)malloc(500);			    ddl_rec.owner_name = (char *)malloc(500);
+    ddl_rec.owner_max_length = 500;				    ddl_rec.owner_max_length = 500;
+
+    ddl_rec.ddl_text_max_length = 1000;				    ddl_rec.ddl_text_max_length = 1000;
+    ddl_rec.ddl_text = (char *)malloc(1000);			    ddl_rec.ddl_text = (char *)malloc(1000);
+
+    /* Get DDL properties */ 					    /* Get DDL properties */ 
+    call_callback (GET_DDL_RECORD_PROPERTIES, &ddl_rec, &resu	    call_callback (GET_DDL_RECORD_PROPERTIES, &ddl_rec, &resu
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving DDL properties.\n	        output_msg ("Error (%hd) retrieving DDL properties.\n
+        free(ddl_rec.ddl_type);					        free(ddl_rec.ddl_type);
+        free(ddl_rec.object_type);				        free(ddl_rec.object_type);
+        free(ddl_rec.object_name);				        free(ddl_rec.object_name);
+        free(ddl_rec.owner_name);				        free(ddl_rec.owner_name);
+        free(ddl_rec.ddl_text);					        free(ddl_rec.ddl_text);
+        return result_code;					        return result_code;
+    }								    }
+
+    output_msg ("DDL    text: %.*s \n", ddl_rec.ddl_text_leng	    output_msg ("DDL    text: %.*s \n", ddl_rec.ddl_text_leng
+                                         ddl_rec.ddl_text);	                                         ddl_rec.ddl_text);
+    output_msg ("DDL    type: %.*s \n", ddl_rec.ddl_type_leng	    output_msg ("DDL    type: %.*s \n", ddl_rec.ddl_type_leng
+                                         ddl_rec.ddl_type);	                                         ddl_rec.ddl_type);
+    output_msg ("Object type: %.*s \n", ddl_rec.object_type_l	    output_msg ("Object type: %.*s \n", ddl_rec.object_type_l
+                                         ddl_rec.object_type)	                                         ddl_rec.object_type)
+    output_msg ("Object name: %.*s \n", ddl_rec.object_length	    output_msg ("Object name: %.*s \n", ddl_rec.object_length
+                                         ddl_rec.object_name)	                                         ddl_rec.object_name)
+    output_msg ("----------------------------------------- \n	    output_msg ("----------------------------------------- \n
+
+    /* Open file for writing out DDL statement */	      <
+    FILE * fp;						      <
+    fp = fopen("/home/opc/output.txt", "w");		      <
+    char* ddl_str = strtok(ddl_rec.ddl_text, "/*");	      <
+    fprintf(fp, "%s\n", ddl_str);			      <
+    fclose(fp);						      <
+							      <
+    free(ddl_rec.ddl_type);					    free(ddl_rec.ddl_type);
+    free(ddl_rec.object_type);					    free(ddl_rec.object_type);
+    free(ddl_rec.object_name);					    free(ddl_rec.object_name);
+    free(ddl_rec.owner_name);					    free(ddl_rec.owner_name);
+    free(ddl_rec.ddl_text);					    free(ddl_rec.ddl_text);
+
+
+    /* initialize env_value*/					    /* initialize env_value*/
+    memset (&env_value, 0, sizeof(env_value_def));		    memset (&env_value, 0, sizeof(env_value_def));
+    env_value.max_length = 500;					    env_value.max_length = 500;
+    env_value.buffer = (char *)malloc(500);			    env_value.buffer = (char *)malloc(500);
+    if (source_or_target == EXIT_FN_CURRENT_VAL)		    if (source_or_target == EXIT_FN_CURRENT_VAL)
+        env_value.source_or_target = EXIT_FN_TARGET_VAL;	        env_value.source_or_target = EXIT_FN_TARGET_VAL;
+    else							    else
+        env_value.source_or_target = source_or_target;		        env_value.source_or_target = source_or_target;
+    								    
+    /* Get table name only */					    /* Get table name only */
+    call_callback (GET_TABLE_NAME_ONLY, &env_value, &result_c	    call_callback (GET_TABLE_NAME_ONLY, &env_value, &result_c
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving table name.\n", r	        output_msg ("Error (%hd) retrieving table name.\n", r
+        free (env_value.buffer);				        free (env_value.buffer);
+        return result_code;					        return result_code;
+    }								    }
+    output_msg ("Table   name only: %.*s \n", 			    output_msg ("Table   name only: %.*s \n", 
+                 env_value.actual_length, env_value.buffer);	                 env_value.actual_length, env_value.buffer);
+    								    
+    /* Get object name only */					    /* Get object name only */
+    call_callback (GET_OBJECT_NAME_ONLY, &env_value, &result_	    call_callback (GET_OBJECT_NAME_ONLY, &env_value, &result_
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving object name.\n", 	        output_msg ("Error (%hd) retrieving object name.\n", 
+        free (env_value.buffer);				        free (env_value.buffer);
+        return result_code;					        return result_code;
+    }								    }
+    output_msg ("Object  name only: %.*s \n", 			    output_msg ("Object  name only: %.*s \n", 
+                 env_value.actual_length, env_value.buffer);	                 env_value.actual_length, env_value.buffer);
+    								    
+    /* Get schema name only */					    /* Get schema name only */
+    call_callback (GET_SCHEMA_NAME_ONLY, &env_value, &result_	    call_callback (GET_SCHEMA_NAME_ONLY, &env_value, &result_
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving schema name.\n", 	        output_msg ("Error (%hd) retrieving schema name.\n", 
+        free (env_value.buffer);				        free (env_value.buffer);
+        return result_code;					        return result_code;
+    }								    }
+    output_msg ("Schema  name only: %.*s \n", 			    output_msg ("Schema  name only: %.*s \n", 
+                 env_value.actual_length, env_value.buffer);	                 env_value.actual_length, env_value.buffer);
+    								    
+    /* Get catalog name only */					    /* Get catalog name only */
+    call_callback (GET_CATALOG_NAME_ONLY, &env_value, &result	    call_callback (GET_CATALOG_NAME_ONLY, &env_value, &result
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving catalog name.\n",	        output_msg ("Error (%hd) retrieving catalog name.\n",
+        free (env_value.buffer);				        free (env_value.buffer);
+        return result_code;					        return result_code;
+    }								    }
+    output_msg ("Catalog name only: %.*s \n", 			    output_msg ("Catalog name only: %.*s \n", 
+                 env_value.actual_length, env_value.buffer);	                 env_value.actual_length, env_value.buffer);
+    								    
+    /* Get fully qualified table name */			    /* Get fully qualified table name */
+    call_callback (GET_TABLE_NAME, &env_value, &result_code);	    call_callback (GET_TABLE_NAME, &env_value, &result_code);
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving fully qualified t	        output_msg ("Error (%hd) retrieving fully qualified t
+        free (env_value.buffer);				        free (env_value.buffer);
+        return result_code;					        return result_code;
+    }								    }
+    								    
+    output_msg ("Table   name full: %.*s \n", 			    output_msg ("Table   name full: %.*s \n", 
+                 env_value.actual_length, env_value.buffer);	                 env_value.actual_length, env_value.buffer);
+
+    /* Get fully qualified object name */			    /* Get fully qualified object name */
+    call_callback (GET_OBJECT_NAME, &env_value, &result_code)	    call_callback (GET_OBJECT_NAME, &env_value, &result_code)
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving fully qualified o	        output_msg ("Error (%hd) retrieving fully qualified o
+        free (env_value.buffer);				        free (env_value.buffer);
+        return result_code;					        return result_code;
+    }								    }
+    output_msg ("Object  name full: %.*s \n", 			    output_msg ("Object  name full: %.*s \n", 
+                 env_value.actual_length, env_value.buffer);	                 env_value.actual_length, env_value.buffer);
+        							        
+    /* Get base object name only */				    /* Get base object name only */
+    call_callback (GET_BASE_OBJECT_NAME_ONLY, &env_value, &re	    call_callback (GET_BASE_OBJECT_NAME_ONLY, &env_value, &re
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving base object name.	        output_msg ("Error (%hd) retrieving base object name.
+        free (env_value.buffer);				        free (env_value.buffer);
+        return result_code;					        return result_code;
+    }								    }
+    output_msg ("Base object name only: %.*s \n", 		    output_msg ("Base object name only: %.*s \n", 
+                 env_value.actual_length, env_value.buffer);	                 env_value.actual_length, env_value.buffer);
+    								    
+    /* Get base object schema name only */			    /* Get base object schema name only */
+    call_callback (GET_BASE_SCHEMA_NAME_ONLY, &env_value, &re	    call_callback (GET_BASE_SCHEMA_NAME_ONLY, &env_value, &re
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving base schema name.	        output_msg ("Error (%hd) retrieving base schema name.
+        free (env_value.buffer);				        free (env_value.buffer);
+        return result_code;					        return result_code;
+    }								    }
+    output_msg ("Base schema name only: %.*s \n", 		    output_msg ("Base schema name only: %.*s \n", 
+                 env_value.actual_length, env_value.buffer);	                 env_value.actual_length, env_value.buffer);
+
+    /* Get fully qualified base object name */			    /* Get fully qualified base object name */
+    call_callback (GET_BASE_OBJECT_NAME, &env_value, &result_	    call_callback (GET_BASE_OBJECT_NAME, &env_value, &result_
+    if (result_code != EXIT_FN_RET_OK)				    if (result_code != EXIT_FN_RET_OK)
+    {								    {
+        output_msg ("Error (%hd) retrieving fully qualified b	        output_msg ("Error (%hd) retrieving fully qualified b
+        free (env_value.buffer);				        free (env_value.buffer);
+        return result_code;					        return result_code;
+    }								    }
+    output_msg ("Base object name full: %.*s \n", 		    output_msg ("Base object name full: %.*s \n", 
+                 env_value.actual_length, env_value.buffer);	                 env_value.actual_length, env_value.buffer);
+
+    free(env_value.buffer);					    free(env_value.buffer);
+    return EXIT_FN_RET_OK;					    return EXIT_FN_RET_OK;
+}								}
+    								    
+/************************************************************	/************************************************************
+  ER user exit object called from various user exit points in	  ER user exit object called from various user exit points in
+  replicat.							  replicat.
+*************************************************************	*************************************************************
+#ifdef WIN32							#ifdef WIN32
+__declspec(dllexport) void CUSEREXIT (exit_call_type_def exit	__declspec(dllexport) void CUSEREXIT (exit_call_type_def exit
+                      exit_result_def    *exit_call_result,	                      exit_result_def    *exit_call_result,
+                      exit_params_def    *exit_params)		                      exit_params_def    *exit_params)
+#else								#else
+void CUSEREXIT (exit_call_type_def exit_call_type,		void CUSEREXIT (exit_call_type_def exit_call_type,
+                exit_result_def    *exit_call_result,		                exit_result_def    *exit_call_result,
+                exit_params_def    *exit_params)		                exit_params_def    *exit_params)
+#endif								#endif
+{								{
+    static short callback_opened = 0;				    static short callback_opened = 0;
+    short result_code;						    short result_code;
+    char table_name[200];					    char table_name[200];
+    char column_name_buf[200];					    char column_name_buf[200];
+    char print_msg[500];					    char print_msg[500];
+    exit_rec_buf_def *record_buffer = NULL;			    exit_rec_buf_def *record_buffer = NULL;
+    exit_rec_buf_ascii_def *ascii_record_buffer = NULL;		    exit_rec_buf_ascii_def *ascii_record_buffer = NULL;
+    record_def *record = NULL;					    record_def *record = NULL;
+    position_def *position_rec = NULL;				    position_def *position_rec = NULL;
+    token_value_def *token_rec = NULL;				    token_value_def *token_rec = NULL;
+    marker_info_def marker_info;				    marker_info_def marker_info;
+    error_info_def error_info;					    error_info_def error_info;
+    statistics_def statistics;					    statistics_def statistics;
+    env_value_def env_value;					    env_value_def env_value;
+    column_def column;						    column_def column;
+    col_metadata_def col_meta;					    col_metadata_def col_meta;
+    table_metadata_def table_meta;				    table_metadata_def table_meta;
+    table_def table;						    table_def table;
+    session_def    session_cs;					    session_def    session_cs;
+    database_defs  dbMetadata;					    database_defs  dbMetadata;
+    event_record_def event_record;				    event_record_def event_record;
+    short i;							    short i;
+    char *tbl_name;						    char *tbl_name;
+    char srcDB_name[200];					    char srcDB_name[200];
+    char tgtDB_name[200];					    char tgtDB_name[200];
+    char srcDB_locale[200];					    char srcDB_locale[200];
+    char tgtDB_locale[200];					    char tgtDB_locale[200];
+    size_t actualLen;						    size_t actualLen;
+   								   
+    char *dbObjTyp [] = {					    char *dbObjTyp [] = {
+           "GENERIC",						           "GENERIC",
+           "TABLE",						           "TABLE",
+           "TABLESPACE",					           "TABLESPACE",
+           "TRIGGER",						           "TRIGGER",
+           "INDEX",						           "INDEX",
+           "CONSTRAINT",					           "CONSTRAINT",
+           "SEQUENCE",						           "SEQUENCE",
+
+           "SCHEMA",						           "SCHEMA",
+           "CATALOG",						           "CATALOG",
+           "NODE",						           "NODE",
+
+           "SERVER",						           "SERVER",
+           "LOGIN",						           "LOGIN",
+           "PASSWORD",						           "PASSWORD",
+
+           "COLUMN",						           "COLUMN",
+           "QUALSERVER",					           "QUALSERVER",
+           "MEMBER"						           "MEMBER"
+     };								     };
+
+    uint32_t seqno;						    uint32_t seqno;
+    int32_t rba;						    int32_t rba;
+
+    typedef struct						    typedef struct
+    {								    {
+        char ch_seqno[4];					        char ch_seqno[4];
+        char ch_rba[4];						        char ch_rba[4];
+    } char_position;						    } char_position;
+    char_position position_char;				    char_position position_char;
+
+    if (!callback_opened)					    if (!callback_opened)
+    {								    {
+        callback_opened = 1;					        callback_opened = 1;
+
+        /* If Windows, need to load the exported callback fun	        /* If Windows, need to load the exported callback fun
+           A Unix Shared object can reference the symbols wit	           A Unix Shared object can reference the symbols wit
+           process image file.  There's no need to retrieve a	           process image file.  There's no need to retrieve a
+           the callback function. */				           the callback function. */
+#ifdef WIN32							#ifdef WIN32
+        if (!open_callback (exit_params->program_name, "ERCAL	        if (!open_callback (exit_params->program_name, "ERCAL
+        {							        {
+            printf ("Error opening ER callback function.\n");	            printf ("Error opening ER callback function.\n");
+            *exit_call_result = EXIT_ABEND_VAL;			            *exit_call_result = EXIT_ABEND_VAL;
+            return;						            return;
+        }							        }
+#endif								#endif
+    }								    }
+
+    record = (record_def *) malloc(sizeof (record_def));	    record = (record_def *) malloc(sizeof (record_def));
+    record_buffer = (exit_rec_buf_def *) malloc(sizeof(exit_r	    record_buffer = (exit_rec_buf_def *) malloc(sizeof(exit_r
+    ascii_record_buffer  = (exit_rec_buf_ascii_def *) malloc(	    ascii_record_buffer  = (exit_rec_buf_ascii_def *) malloc(
+
+    switch (exit_call_type)					    switch (exit_call_type)
+    {								    {
+        case EXIT_CALL_START:					        case EXIT_CALL_START:
+            output_msg ("\nUser exit: EXIT_CALL_START.  Calle	            output_msg ("\nUser exit: EXIT_CALL_START.  Calle
+                        exit_params->program_name);		                        exit_params->program_name);
+
+            /* Retrieve the default session character set */	            /* Retrieve the default session character set */
+            memset (&session_cs, 0, sizeof(session_cs));	            memset (&session_cs, 0, sizeof(session_cs));
+            call_callback (GET_SESSION_CHARSET, &session_cs, 	            call_callback (GET_SESSION_CHARSET, &session_cs, 
+            output_msg ("\nUser exit: GET DEFAULT SESSION CHA	            output_msg ("\nUser exit: GET DEFAULT SESSION CHA
+                        (unsigned int)session_cs.session_char	                        (unsigned int)session_cs.session_char
+
+            /* Set session character set */			            /* Set session character set */
+            memset (&session_cs, 0, sizeof(session_cs));	            memset (&session_cs, 0, sizeof(session_cs));
+            session_cs.session_charset = ULIB_CS_UTF8;		            session_cs.session_charset = ULIB_CS_UTF8;
+            call_callback (SET_SESSION_CHARSET, &session_cs, 	            call_callback (SET_SESSION_CHARSET, &session_cs, 
+            if (result_code != EXIT_FN_RET_OK)			            if (result_code != EXIT_FN_RET_OK)
+              output_msg ("\nUser exit: SET SESSION CHARSET: 	              output_msg ("\nUser exit: SET SESSION CHARSET: 
+                        (unsigned int)session_cs.session_char	                        (unsigned int)session_cs.session_char
+            else						            else
+              output_msg ("\nUser exit: GET NEWLY SET SESSION	              output_msg ("\nUser exit: GET NEWLY SET SESSION
+                        (unsigned int)session_cs.session_char	                        (unsigned int)session_cs.session_char
+
+            /* Retrieve the newly set session character set *	            /* Retrieve the newly set session character set *
+            memset (&session_cs, 0, sizeof(session_cs));	            memset (&session_cs, 0, sizeof(session_cs));
+            call_callback (GET_SESSION_CHARSET, &session_cs, 	            call_callback (GET_SESSION_CHARSET, &session_cs, 
+            output_msg ("\nUser exit: GET NEWLY SET SESSION C	            output_msg ("\nUser exit: GET NEWLY SET SESSION C
+                        (unsigned int)session_cs.session_char	                        (unsigned int)session_cs.session_char
+
+            /* Retrieve database metadata */			            /* Retrieve database metadata */
+            dbMetadata.source_db_def.dbName = srcDB_name;	            dbMetadata.source_db_def.dbName = srcDB_name;
+            dbMetadata.source_db_def.dbName_max_length = 200;	            dbMetadata.source_db_def.dbName_max_length = 200;
+            dbMetadata.target_db_def.dbName = tgtDB_name;	            dbMetadata.target_db_def.dbName = tgtDB_name;
+            dbMetadata.target_db_def.dbName_max_length = 200;	            dbMetadata.target_db_def.dbName_max_length = 200;
+            dbMetadata.source_db_def.locale = srcDB_locale;	            dbMetadata.source_db_def.locale = srcDB_locale;
+            dbMetadata.source_db_def.locale_max_length = 200;	            dbMetadata.source_db_def.locale_max_length = 200;
+            dbMetadata.target_db_def.locale = tgtDB_locale;	            dbMetadata.target_db_def.locale = tgtDB_locale;
+            dbMetadata.target_db_def.locale_max_length = 200;	            dbMetadata.target_db_def.locale_max_length = 200;
+
+            call_callback (GET_DATABASE_METADATA, &dbMetadata	            call_callback (GET_DATABASE_METADATA, &dbMetadata
+            actualLen = dbMetadata.source_db_def.dbName_actua	            actualLen = dbMetadata.source_db_def.dbName_actua
+            dbMetadata.source_db_def.dbName[actualLen] = 0;	            dbMetadata.source_db_def.dbName[actualLen] = 0;
+            actualLen = dbMetadata.target_db_def.dbName_actua	            actualLen = dbMetadata.target_db_def.dbName_actua
+            dbMetadata.target_db_def.dbName[actualLen] = 0;	            dbMetadata.target_db_def.dbName[actualLen] = 0;
+            actualLen = dbMetadata.source_db_def.locale_actua	            actualLen = dbMetadata.source_db_def.locale_actua
+            dbMetadata.source_db_def.locale[actualLen] = 0;	            dbMetadata.source_db_def.locale[actualLen] = 0;
+            actualLen = dbMetadata.target_db_def.locale_actua	            actualLen = dbMetadata.target_db_def.locale_actua
+            dbMetadata.target_db_def.locale[actualLen] = 0;	            dbMetadata.target_db_def.locale[actualLen] = 0;
+            output_msg ("\nUser exit: GET DB Metadata:\n");	            output_msg ("\nUser exit: GET DB Metadata:\n");
+            output_msg ("     SourceDB Name: %s\n",		            output_msg ("     SourceDB Name: %s\n",
+                        dbMetadata.source_db_def.dbName);	                        dbMetadata.source_db_def.dbName);
+            output_msg ("     SourceDB Locale: %s\n",		            output_msg ("     SourceDB Locale: %s\n",
+                        dbMetadata.source_db_def.locale);	                        dbMetadata.source_db_def.locale);
+            output_msg ("     SourceDB DBObject Type Metadata	            output_msg ("     SourceDB DBObject Type Metadata
+
+            // userexit does not support packge and procedure	            // userexit does not support packge and procedure
+            for (i = 0; i < MAXDBOBJTYPE_122; i++) {		            for (i = 0; i < MAXDBOBJTYPE_122; i++) {
+               output_msg ("         DBObject Type[%s]: 0x%x 	               output_msg ("         DBObject Type[%s]: 0x%x 
+                        dbObjTyp[i], dbMetadata.source_db_def	                        dbObjTyp[i], dbMetadata.source_db_def
+
+               /* Test the macros defined in usrdecs.h to che	               /* Test the macros defined in usrdecs.h to che
+                  name's metadata */				                  name's metadata */
+               if (supportsMixedCaseIndentifiers(dbMetadata.s	               if (supportsMixedCaseIndentifiers(dbMetadata.s
+               {						               {
+                   output_msg ("            Unquoted Name Is 	                   output_msg ("            Unquoted Name Is 
+               }						               }
+               if (supportsMixedCaseQuotedIndentifiers(dbMeta	               if (supportsMixedCaseQuotedIndentifiers(dbMeta
+               {						               {
+                   output_msg ("            Quoted Name Is Ca	                   output_msg ("            Quoted Name Is Ca
+               }						               }
+               if (storesLowerCaseIdentifiers(dbMetadata.sour	               if (storesLowerCaseIdentifiers(dbMetadata.sour
+               {						               {
+                   output_msg ("            Unquoted Name Is 	                   output_msg ("            Unquoted Name Is 
+               }						               }
+               if (storesLowerCaseQuotedIdentifiers(dbMetadat	               if (storesLowerCaseQuotedIdentifiers(dbMetadat
+               {						               {
+                   output_msg ("            Quoted Name Is Ca	                   output_msg ("            Quoted Name Is Ca
+               }						               }
+               if (storesMixedCaseIdentifiers(dbMetadata.sour	               if (storesMixedCaseIdentifiers(dbMetadata.sour
+               {						               {
+                   output_msg ("            Unquoted Name Is 	                   output_msg ("            Unquoted Name Is 
+               }						               }
+               if (storesMixedCaseQuotedIdentifiers(dbMetadat	               if (storesMixedCaseQuotedIdentifiers(dbMetadat
+               {						               {
+                   output_msg ("            Quoted Name Is Ca	                   output_msg ("            Quoted Name Is Ca
+               }						               }
+               if (storesUpperCaseIdentifiers(dbMetadata.sour	               if (storesUpperCaseIdentifiers(dbMetadata.sour
+               {						               {
+                   output_msg ("            Unquoted Name Is 	                   output_msg ("            Unquoted Name Is 
+               }						               }
+               if (storesUpperCaseQuotedIdentifiers(dbMetadat	               if (storesUpperCaseQuotedIdentifiers(dbMetadat
+               {						               {
+                   output_msg ("            Quoted Name Is Ca	                   output_msg ("            Quoted Name Is Ca
+               }						               }
+            }							            }
+            							            
+            output_msg ("\nUser exit: GET DB Metadata:\n");	            output_msg ("\nUser exit: GET DB Metadata:\n");
+            output_msg ("     TargetDB Name: %s\n",		            output_msg ("     TargetDB Name: %s\n",
+                        dbMetadata.target_db_def.dbName);	                        dbMetadata.target_db_def.dbName);
+            output_msg ("     TargetDB Locale: %s\n",		            output_msg ("     TargetDB Locale: %s\n",
+                        dbMetadata.target_db_def.locale); 	                        dbMetadata.target_db_def.locale); 
+
+            // userexit does not support packge and procedure	            // userexit does not support packge and procedure
+            for (i = 0; i < MAXDBOBJTYPE_122; i++) {		            for (i = 0; i < MAXDBOBJTYPE_122; i++) {
+               output_msg ("         DBObject Type[%s]: 0x%x 	               output_msg ("         DBObject Type[%s]: 0x%x 
+                        dbObjTyp[i], dbMetadata.target_db_def	                        dbObjTyp[i], dbMetadata.target_db_def
+               /* Test the macros defined in usrdecs.h to che	               /* Test the macros defined in usrdecs.h to che
+                  name's metadata */				                  name's metadata */
+               if (supportsMixedCaseIndentifiers(dbMetadata.t	               if (supportsMixedCaseIndentifiers(dbMetadata.t
+               {						               {
+                   output_msg ("            Unquoted Name Is 	                   output_msg ("            Unquoted Name Is 
+               }						               }
+               if (supportsMixedCaseQuotedIndentifiers(dbMeta	               if (supportsMixedCaseQuotedIndentifiers(dbMeta
+               {						               {
+                   output_msg ("            Quoted Name Is Ca	                   output_msg ("            Quoted Name Is Ca
+               }						               }
+               if (storesLowerCaseIdentifiers(dbMetadata.targ	               if (storesLowerCaseIdentifiers(dbMetadata.targ
+               {						               {
+                   output_msg ("            Unquoted Name Is 	                   output_msg ("            Unquoted Name Is 
+               }						               }
+               if (storesLowerCaseQuotedIdentifiers(dbMetadat	               if (storesLowerCaseQuotedIdentifiers(dbMetadat
+               {						               {
+                   output_msg ("            Quoted Name Is Ca	                   output_msg ("            Quoted Name Is Ca
+               }						               }
+               if (storesMixedCaseIdentifiers(dbMetadata.targ	               if (storesMixedCaseIdentifiers(dbMetadata.targ
+               {						               {
+                   output_msg ("            Unquoted Name Is 	                   output_msg ("            Unquoted Name Is 
+               }						               }
+               if (storesMixedCaseQuotedIdentifiers(dbMetadat	               if (storesMixedCaseQuotedIdentifiers(dbMetadat
+               {						               {
+                   output_msg ("            Quoted Name Is Ca	                   output_msg ("            Quoted Name Is Ca
+               }						               }
+               if (storesUpperCaseIdentifiers(dbMetadata.targ	               if (storesUpperCaseIdentifiers(dbMetadata.targ
+               {						               {
+                   output_msg ("            Unquoted Name Is 	                   output_msg ("            Unquoted Name Is 
+               }						               }
+               if (storesUpperCaseQuotedIdentifiers(dbMetadat	               if (storesUpperCaseQuotedIdentifiers(dbMetadat
+               {						               {
+                   output_msg ("            Quoted Name Is Ca	                   output_msg ("            Quoted Name Is Ca
+               }						               }
+            }							            }
+
+            break;						            break;
+
+        case EXIT_CALL_STOP:					        case EXIT_CALL_STOP:
+            output_msg ("\nUser exit: EXIT_CALL_STOP.\n");	            output_msg ("\nUser exit: EXIT_CALL_STOP.\n");
+
+            memset (&statistics, 0, sizeof(statistics));	            memset (&statistics, 0, sizeof(statistics));
+
+            /* Retrieve statistics since application startup 	            /* Retrieve statistics since application startup 
+            Provide a fully qualified table name (2 or 3 part	            Provide a fully qualified table name (2 or 3 part
+
+            statistics.group = EXIT_STAT_GROUP_STARTUP;		            statistics.group = EXIT_STAT_GROUP_STARTUP;
+            strcpy (table_name, "TKTEST.TCUSTMER");		            strcpy (table_name, "TKTEST.TCUSTMER");
+            statistics.table_name = table_name;			            statistics.table_name = table_name;
+
+            call_callback (GET_STATISTICS, &statistics, &resu	            call_callback (GET_STATISTICS, &statistics, &resu
+            if (result_code != EXIT_FN_RET_OK &&		            if (result_code != EXIT_FN_RET_OK &&
+                result_code != EXIT_FN_RET_TABLE_NOT_FOUND)	                result_code != EXIT_FN_RET_TABLE_NOT_FOUND)
+            {							            {
+                output_msg ("Error (%hd) retrieving statistic	                output_msg ("Error (%hd) retrieving statistic
+                free (record);					                free (record);
+                free (record_buffer);				                free (record_buffer);
+                free (ascii_record_buffer);			                free (ascii_record_buffer);
+                *exit_call_result = EXIT_ABEND_VAL;		                *exit_call_result = EXIT_ABEND_VAL;
+                return;						                return;
+            }							            }
+
+            if (result_code == EXIT_FN_RET_OK)			            if (result_code == EXIT_FN_RET_OK)
+            {							            {
+                output_msg ("Statistics since process startup	                output_msg ("Statistics since process startup
+                            "Total inserts:       \t%ld\n"	                            "Total inserts:       \t%ld\n"
+                            "Total updates:       \t%ld\n"	                            "Total updates:       \t%ld\n"
+                            "Total deletes:       \t%ld\n"	                            "Total deletes:       \t%ld\n"
+                            "Total discards:      \t%ld\n"	                            "Total discards:      \t%ld\n"
+                            "Total ignores:       \t%ld\n"	                            "Total ignores:       \t%ld\n"
+                            "Total truncates:     \t%ld\n"	                            "Total truncates:     \t%ld\n"
+                            "Total DB operations: \t%ld\n"	                            "Total DB operations: \t%ld\n"
+                            "Total operations:    \t%ld\n\n",	                            "Total operations:    \t%ld\n\n",
+                            statistics.start_datetime, table_	                            statistics.start_datetime, table_
+                            statistics.num_inserts, statistic	                            statistics.num_inserts, statistic
+                            statistics.num_deletes, statistic	                            statistics.num_deletes, statistic
+                            statistics.num_ignores, statistic	                            statistics.num_ignores, statistic
+                            statistics.total_db_operations, s	                            statistics.total_db_operations, s
+            }							            }
+
+            memset (&statistics, 0, sizeof(statistics));	            memset (&statistics, 0, sizeof(statistics));
+            statistics.group = EXIT_STAT_GROUP_STARTUP;		            statistics.group = EXIT_STAT_GROUP_STARTUP;
+            strcpy (table_name, "TKTEST.TCUSTORD");		            strcpy (table_name, "TKTEST.TCUSTORD");
+            statistics.table_name = table_name;			            statistics.table_name = table_name;
+
+            call_callback (GET_STATISTICS, &statistics, &resu	            call_callback (GET_STATISTICS, &statistics, &resu
+            if (result_code != EXIT_FN_RET_OK &&		            if (result_code != EXIT_FN_RET_OK &&
+                result_code != EXIT_FN_RET_TABLE_NOT_FOUND)	                result_code != EXIT_FN_RET_TABLE_NOT_FOUND)
+            {							            {
+                output_msg ("Error (%hd) retrieving statistic	                output_msg ("Error (%hd) retrieving statistic
+                free (record);					                free (record);
+                free (record_buffer);				                free (record_buffer);
+                free (ascii_record_buffer);			                free (ascii_record_buffer);
+                *exit_call_result = EXIT_ABEND_VAL;		                *exit_call_result = EXIT_ABEND_VAL;
+                return;						                return;
+            }							            }
+
+            if (result_code == EXIT_FN_RET_OK)			            if (result_code == EXIT_FN_RET_OK)
+            {							            {
+                output_msg ("Statistics since process startup	                output_msg ("Statistics since process startup
+                            "Total inserts:       \t%ld\n"	                            "Total inserts:       \t%ld\n"
+                            "Total updates:       \t%ld\n"	                            "Total updates:       \t%ld\n"
+                            "Total deletes:       \t%ld\n"	                            "Total deletes:       \t%ld\n"
+                            "Total discards:      \t%ld\n"	                            "Total discards:      \t%ld\n"
+                            "Total ignores:       \t%ld\n"	                            "Total ignores:       \t%ld\n"
+                            "Total truncates:     \t%ld\n"	                            "Total truncates:     \t%ld\n"
+                            "Total DB operations: \t%ld\n"	                            "Total DB operations: \t%ld\n"
+                            "Total operations:    \t%ld\n",	                            "Total operations:    \t%ld\n",
+                            statistics.start_datetime, table_	                            statistics.start_datetime, table_
+                            statistics.num_inserts, statistic	                            statistics.num_inserts, statistic
+                            statistics.num_deletes, statistic	                            statistics.num_deletes, statistic
+                            statistics.num_ignores, statistic	                            statistics.num_ignores, statistic
+                            statistics.total_db_operations, s	                            statistics.total_db_operations, s
+            }							            }
+
+            close_callback();					            close_callback();
+            break;						            break;
+
+        case EXIT_CALL_BEGIN_TRANS:				        case EXIT_CALL_BEGIN_TRANS:
+            output_msg ("\nUser exit: EXIT_CALL_BEGIN_TRANS.\	            output_msg ("\nUser exit: EXIT_CALL_BEGIN_TRANS.\
+            break;						            break;
+
+        case EXIT_CALL_END_TRANS:				        case EXIT_CALL_END_TRANS:
+            output_msg ("\nUser exit: EXIT_CALL_END_TRANS.\n"	            output_msg ("\nUser exit: EXIT_CALL_END_TRANS.\n"
+            break;						            break;
+
+        case EXIT_CALL_CHECKPOINT:				        case EXIT_CALL_CHECKPOINT:
+            output_msg ("\nUser exit: EXIT_CALL_CHECKPOINT.\n	            output_msg ("\nUser exit: EXIT_CALL_CHECKPOINT.\n
+
+            position_rec = (position_def *) malloc (sizeof(po	            position_rec = (position_def *) malloc (sizeof(po
+            position_rec->position = (char *) malloc (sizeof 	            position_rec->position = (char *) malloc (sizeof 
+
+            position_rec->ascii_or_internal = EXIT_FN_INTERNA	            position_rec->ascii_or_internal = EXIT_FN_INTERNA
+            position_rec->position_type = CURRENT_CHECKPOINT;	            position_rec->position_type = CURRENT_CHECKPOINT;
+            call_callback (GET_POSITION,  position_rec,&resul	            call_callback (GET_POSITION,  position_rec,&resul
+            if (!result_code)					            if (!result_code)
+            {							            {
+                memcpy (&position_char, position_rec->positio	                memcpy (&position_char, position_rec->positio
+                if (LittleEndian())				                if (LittleEndian())
+                {						                {
+                    ReverseBytes (&position_char.ch_seqno, si	                    ReverseBytes (&position_char.ch_seqno, si
+                    ReverseBytes (&position_char.ch_rba, size	                    ReverseBytes (&position_char.ch_rba, size
+                }						                }
+
+                memcpy (&seqno, position_char.ch_seqno, sizeo	                memcpy (&seqno, position_char.ch_seqno, sizeo
+                memcpy (&rba, &position_char.ch_rba[0], sizeo	                memcpy (&rba, &position_char.ch_rba[0], sizeo
+                sprintf (print_msg, "\nGET_POSITION CURRENT_C	                sprintf (print_msg, "\nGET_POSITION CURRENT_C
+                                                             	                                                             
+
+                call_callback (OUTPUT_MESSAGE_TO_REPORT, &pri	                call_callback (OUTPUT_MESSAGE_TO_REPORT, &pri
+            }							            }
+            free(position_rec->position);			            free(position_rec->position);
+            free(position_rec);					            free(position_rec);
+            break;						            break;
+
+        case EXIT_CALL_PROCESS_MARKER:				        case EXIT_CALL_PROCESS_MARKER:
+            output_msg ("\nUser exit: EXIT_CALL_PROCESS_MARKE	            output_msg ("\nUser exit: EXIT_CALL_PROCESS_MARKE
+
+            memset (&marker_info, 0, sizeof(marker_info));	            memset (&marker_info, 0, sizeof(marker_info));
+
+            call_callback (GET_MARKER_INFO, &marker_info, &re	            call_callback (GET_MARKER_INFO, &marker_info, &re
+            if (result_code != EXIT_FN_RET_OK)			            if (result_code != EXIT_FN_RET_OK)
+            {							            {
+                output_msg ("Error (%hd) retrieving marker in	                output_msg ("Error (%hd) retrieving marker in
+                free (record);					                free (record);
+                free (record_buffer);				                free (record_buffer);
+                free (ascii_record_buffer);			                free (ascii_record_buffer);
+                *exit_call_result = EXIT_ABEND_VAL;		                *exit_call_result = EXIT_ABEND_VAL;
+                return;						                return;
+            }							            }
+
+            output_msg ("Marker information:\n"			            output_msg ("Marker information:\n"
+                        "Date/time added: %s\n"			                        "Date/time added: %s\n"
+                        "Date/time processed: %s\n"		                        "Date/time processed: %s\n"
+                        "Program name: %s\n"			                        "Program name: %s\n"
+                        "Group name: %s\n"			                        "Group name: %s\n"
+                        "Node name: %s\n"			                        "Node name: %s\n"
+                        "Marker text: %s\n",			                        "Marker text: %s\n",
+                        marker_info.added, marker_info.proces	                        marker_info.added, marker_info.proces
+                        marker_info.program, marker_info.grou	                        marker_info.program, marker_info.grou
+                        marker_info.node, marker_info.text);	                        marker_info.node, marker_info.text);
+            break;						            break;
+
+        case EXIT_CALL_PROCESS_RECORD:				        case EXIT_CALL_PROCESS_RECORD:
+            output_msg ("\nUser exit: EXIT_CALL_PROCESS_RECOR	            output_msg ("\nUser exit: EXIT_CALL_PROCESS_RECOR
+
+            position_rec = (position_def *) malloc (sizeof(po	            position_rec = (position_def *) malloc (sizeof(po
+            position_rec->position = (char *) malloc (sizeof 	            position_rec->position = (char *) malloc (sizeof 
+
+            position_rec->ascii_or_internal = EXIT_FN_INTERNA	            position_rec->ascii_or_internal = EXIT_FN_INTERNA
+            position_rec->position_type = STARTUP_CHECKPOINT;	            position_rec->position_type = STARTUP_CHECKPOINT;
+            call_callback (GET_POSITION, position_rec,&result |	            call_callback (GET_POSITION,  position_rec,&resul
+            if (!result_code)					            if (!result_code)
+            {							            {
+                memcpy (&position_char, position_rec->positio	                memcpy (&position_char, position_rec->positio
+                if (LittleEndian())				                if (LittleEndian())
+                {						                {
+                    ReverseBytes (&position_char.ch_seqno, si	                    ReverseBytes (&position_char.ch_seqno, si
+                    ReverseBytes (&position_char.ch_rba, size	                    ReverseBytes (&position_char.ch_rba, size
+                }						                }
+                memcpy (&seqno, position_char.ch_seqno, sizeo	                memcpy (&seqno, position_char.ch_seqno, sizeo
+                memcpy (&rba, position_char.ch_rba, sizeof (r	                memcpy (&rba, position_char.ch_rba, sizeof (r
+                sprintf (print_msg, "\nGET_POSITION STARTUP_C	                sprintf (print_msg, "\nGET_POSITION STARTUP_C
+                                                             	                                                             
+                call_callback (OUTPUT_MESSAGE_TO_REPORT, &pri	                call_callback (OUTPUT_MESSAGE_TO_REPORT, &pri
+            }							            }
+
+            position_rec->ascii_or_internal = EXIT_FN_INTERNA	            position_rec->ascii_or_internal = EXIT_FN_INTERNA
+            position_rec->position_type = CURRENT_CHECKPOINT;	            position_rec->position_type = CURRENT_CHECKPOINT;
+            call_callback (GET_POSITION,  position_rec,&resul	            call_callback (GET_POSITION,  position_rec,&resul
+            if (!result_code)					            if (!result_code)
+            {							            {
+                memcpy (&position_char, position_rec->positio	                memcpy (&position_char, position_rec->positio
+                if (LittleEndian())				                if (LittleEndian())
+                {						                {
+                    ReverseBytes (&position_char.ch_seqno, si	                    ReverseBytes (&position_char.ch_seqno, si
+                    ReverseBytes (&position_char.ch_rba, size	                    ReverseBytes (&position_char.ch_rba, size
+                }						                }
+                memcpy (&seqno, position_char.ch_seqno, sizeo	                memcpy (&seqno, position_char.ch_seqno, sizeo
+                memcpy (&rba, position_char.ch_rba, sizeof (r	                memcpy (&rba, position_char.ch_rba, sizeof (r
+                sprintf (print_msg, "\nGET_POSITION CURRENT_C	                sprintf (print_msg, "\nGET_POSITION CURRENT_C
+                                                             	                                                             
+                call_callback (OUTPUT_MESSAGE_TO_REPORT, &pri	                call_callback (OUTPUT_MESSAGE_TO_REPORT, &pri
+            }							            }
+
+            free(position_rec->position);			            free(position_rec->position);
+            free(position_rec);					            free(position_rec);
+
+            memset (record, 0, sizeof(record));			            memset (record, 0, sizeof(record));
+            record->source_or_target = EXIT_FN_SOURCE_VAL;	            record->source_or_target = EXIT_FN_SOURCE_VAL;
+            record->buffer = (char *) record_buffer;		            record->buffer = (char *) record_buffer;
+
+            call_callback (GET_OPERATION_TYPE, record, &resul	            call_callback (GET_OPERATION_TYPE, record, &resul
+            if (result_code != EXIT_FN_RET_OK)			            if (result_code != EXIT_FN_RET_OK)
+            {							            {
+                output_msg ("Error (%hd) retrieving operation	                output_msg ("Error (%hd) retrieving operation
+                free (record);					                free (record);
+                free (record_buffer);				                free (record_buffer);
+                free (ascii_record_buffer);			                free (ascii_record_buffer);
+                *exit_call_result = EXIT_ABEND_VAL;		                *exit_call_result = EXIT_ABEND_VAL;
+                return;						                return;
+            }							            }
+
+            /* Process DDL Commands */				            /* Process DDL Commands */
+            if (record->io_type == SQL_DDL_VAL)			            if (record->io_type == SQL_DDL_VAL)
+            {							            {
+                output_msg ("\n*** SOURCE DDL COMMAND***\n");	                output_msg ("\n*** SOURCE DDL COMMAND***\n");
+                result_code = display_ddl (EXIT_FN_SOURCE_VAL	                result_code = display_ddl (EXIT_FN_SOURCE_VAL
+                                           EXIT_FN_INTERNAL_F	                                           EXIT_FN_INTERNAL_F
+                if (result_code != EXIT_FN_RET_OK)		                if (result_code != EXIT_FN_RET_OK)
+                {						                {
+                    output_msg ("Error (%hd) displaying DDL i	                    output_msg ("Error (%hd) displaying DDL i
+                                 result_code);			                                 result_code);
+                    free (record);				                    free (record);
+                    free (record_buffer);			                    free (record_buffer);
+                    free (ascii_record_buffer);			                    free (ascii_record_buffer);
+                    *exit_call_result = EXIT_ABEND_VAL;		                    *exit_call_result = EXIT_ABEND_VAL;
+                    return;					                    return;
+                }						                }
+                						                
+                /* If we are in Replicat print target DDL inf	                /* If we are in Replicat print target DDL inf
+                output_msg ("\n*** TARGET DDL COMMAND***\n");	                output_msg ("\n*** TARGET DDL COMMAND***\n");
+                result_code = display_ddl (EXIT_FN_TARGET_VAL	                result_code = display_ddl (EXIT_FN_TARGET_VAL
+                                           EXIT_FN_INTERNAL_F	                                           EXIT_FN_INTERNAL_F
+                if (result_code != EXIT_FN_RET_NOT_SUPPORTED 	                if (result_code != EXIT_FN_RET_NOT_SUPPORTED 
+                {						                {
+                    output_msg ("Error (%hd) displaying DDL i	                    output_msg ("Error (%hd) displaying DDL i
+                                 result_code);			                                 result_code);
+                    free (record);				                    free (record);
+                    free (record_buffer);			                    free (record_buffer);
+                    free (ascii_record_buffer);			                    free (ascii_record_buffer);
+                    *exit_call_result = EXIT_ABEND_VAL;		                    *exit_call_result = EXIT_ABEND_VAL;
+                    return;					                    return;
+                }						                }
+                break;						                break;
+            }							            }
+							      >
+							      >	            /* Example of getting a token placed in a prior e
+							      >	               TABLE OWNER.TABLE, tokens (TK-HOST = @GETENV (
+							      >	            */
+							      >
+							      >	            token_rec = (token_value_def *) malloc (sizeof(to
+							      >	            token_rec->max_length = 50;
+							      >	            token_rec->token_value = (char *) malloc (token_r
+							      >	            token_rec->token_name = (char *) malloc (sizeof (
+							      >	            strcpy (token_rec->token_name, "TK-HOST");
+							      >	            call_callback (GET_USER_TOKEN_VALUE, token_rec, &
+							      >
+							      >	            if (token_rec->actual_length > 0)
+							      >	            {
+							      >	                sprintf ( print_msg, "\nGET_TOKEN_VALUE for T
+							      >	                call_callback (OUTPUT_MESSAGE_TO_REPORT, &pri
+							      >	            }
+							      >	            free(token_rec->token_name);
+							      >	            free(token_rec->token_value);
+							      >	            free(token_rec);
+							      >
+							      >	            /* An example of how a user exit parameter can be
+							      >
+							      >	               We can ignore deletes on the TCUSTMER table by
+							      >	               following in the EXTRACT/REPLICAT parameter fi
+							      >	               MAP TCUSTMER, TARGET TCUSTMER, EXITPARAM "IGNO
+							      >
+							      >	            if (!strcmp (exit_params->function_param, "IGNORE
+							      >	                record->io_type == DELETE_VAL)
+							      >	            {
+							      >	                free (record);
+							      >	                free (record_buffer);
+							      >	                free (ascii_record_buffer);
+							      >	                *exit_call_result = EXIT_IGNORE_VAL;
+							      >	                return;
+							      >	            }
+							      >
+							      >	            call_callback (GET_RECORD_BUFFER, record, &result
+							      >	            if (result_code != EXIT_FN_RET_OK)
+							      >	            {
+							      >	                output_msg ("Error (%hd) retrieving record bu
+							      >	                free (record);
+							      >	                free (record_buffer);
+							      >	                free (ascii_record_buffer);
+							      >	                *exit_call_result = EXIT_ABEND_VAL;
+							      >	                return;
+							      >	            }
+							      >
+							      >	            output_msg ("Processing record with operation typ
+							      >	                        record->io_type);
+							      >
+							      >	            output_msg ("\n*** SOURCE RECORD ***\n");
+							      >	            result_code = display_record (EXIT_FN_SOURCE_VAL,
+							      >	                                          EXIT_FN_INTERNAL_FO
+							      >	            if (result_code != EXIT_FN_RET_OK)
+							      >	            {
+							      >	                output_msg ("Error (%hd) displaying source co
+							      >	                free (record);
+							      >	                free (record_buffer);
+							      >	                free (ascii_record_buffer);
+							      >	                *exit_call_result = EXIT_ABEND_VAL;
+							      >	                return;
+							      >	            }
+							      >
+							      >	            memset (&table, 0, sizeof(table_def));
+							      >
+							      >	            if (record->mapped)
+							      >	                table.source_or_target = EXIT_FN_TARGET_VAL;
+							      >	            else
+							      >	                table.source_or_target = EXIT_FN_SOURCE_VAL;
+							      >
+							      >	            call_callback (GET_TABLE_COLUMN_COUNT, &table, &r
+							      >	            if (result_code != EXIT_FN_RET_OK)
+							      >	            {
+							      >	                output_msg ("Error (%hd) retrieving table col
+							      >	                free (record);
+							      >	                free (record_buffer);
+							      >	                free (ascii_record_buffer);
+							      >	                *exit_call_result = EXIT_ABEND_VAL;
+							      >	               return;
+							      >	            }
+							      >
+							      >	            memset (&table_meta, 0, sizeof(table_meta));
+							      >	            if (record->mapped)
+							      >	                table_meta.source_or_target = EXIT_FN_TARGET_
+							      >	            else
+							      >	                table_meta.source_or_target = EXIT_FN_SOURCE_
+							      >	            table_meta.table_name = (char *)malloc(100);
+							      >	            table_meta.max_name_length = 100;
+							      >	            table_meta.key_columns = (short *)malloc( table.n
+							      >
+							      >	            call_callback (GET_TABLE_METADATA, &table_meta, &
+							      >	            if (result_code != EXIT_FN_RET_OK)
+							      >	            {
+							      >	                output_msg ("Error (%hd) retrieving table met
+							      >	                free (table_meta.table_name);
+							      >	                free (table_meta.key_columns);
+							      >	                free (record);
+							      >	                free (record_buffer);
+							      >	                free (ascii_record_buffer);
+							      >	                *exit_call_result = EXIT_ABEND_VAL;
+							      >	                return;
+							      >	            }
+							      >
+							      >	            output_msg ("*** GET_TABLE_METADATA ***\n");
+							      >	            output_msg ("table_name: (%s)\n  num_columns: (%h
+							      >	                "num_key_columns (%hd)\n key_columns0 (%hd)\n
+							      >	                "source_or_target (%hd)\n num_user_columns (%
+							      >	                table_meta.num_columns,
+							      >	                table_meta.num_key_columns, table_meta.key_co
+							      >	                table_meta.using_pseudo_key, table_meta.sourc
+							      >	                table_meta.num_user_columns);
+							      >
+							      >	            free (table_meta.table_name);
+							      >	            free (table_meta.key_columns);
+							      >
+							      >	            memset (&col_meta, 0, sizeof(col_meta));
+							      >	            if (record->mapped)
+							      >	                col_meta.source_or_target = EXIT_FN_TARGET_VA
+							      >	            else
+							      >	                col_meta.source_or_target = EXIT_FN_SOURCE_VA
+							      >	            col_meta.source_or_target = EXIT_FN_SOURCE_VAL;
+							      >	            col_meta.column_name = (char *)malloc(100);
+							      >	            col_meta.max_name_length = 100;
+							      >
+							      >	            for (i=0; i < table.num_columns;i++)
+							      >	            {
+							      >	                col_meta.column_index = i;
+							      >
+							      >	                call_callback (GET_COL_METADATA_FROM_INDEX, &
+							      >	                if (result_code != EXIT_FN_RET_OK)
+							      >	                {
+							      >	                    output_msg ("Error (%hd) retrieving colum
+							      >	                    free (col_meta.column_name);
+							      >	                    free (record);
+							      >	                    free (record_buffer);
+							      >	                    free (ascii_record_buffer);
+							      >	                    *exit_call_result = EXIT_ABEND_VAL;
+							      >	                    return;
+							      >	                }
+							      >
+							      >	                output_msg ("*** GET_COL_METADATA_FROM_INDEX 
+							      >	                output_msg ("column_name: (%s)\n native_data_
+							      >	                    "gg_data_type (%hd)\n gg_sub_data_type (%
+							      >	                    "is_part_of_key (%hd)\n length (%hd)\n pr
+							      >	                    "source_or_target (%hd).\n KEYCOLIDX %hd\
+							      >	                    col_meta.native_data_type,
+							      >	                    col_meta.gg_data_type, col_meta.gg_sub_da
+							      >	                    col_meta.is_part_of_key, col_meta.length,
+							      >	                    col_meta.source_or_target, col_meta.key_c
+							      >	                    col_meta.is_hidden_column);
+							      >	            }
+							      >	            free (col_meta.column_name);
+							      >
+							      >	            if (record->mapped) /* We have a target record */
+							      >	            {
+							      >	                output_msg ("\n*** TARGET RECORD ***\n");
+							      >	                result_code = display_record (EXIT_FN_TARGET_
+							      >	                                              EXIT_FN_INTERNA
+							      >	                if (result_code != EXIT_FN_RET_OK)
+							      >	                {
+							      >	                    output_msg ("Error (%hd) displaying targe
+							      >	                    free (record);
+							      >	                    free (record_buffer);
+							      >	                    free (ascii_record_buffer);
+							      >	                    *exit_call_result = EXIT_ABEND_VAL;
+							      >	                    return;
+							      >	                }
+							      >
+							      >	                output_msg ("\n*** CURRENT RECORD ***\n");
+							      >
+							      >	                column.source_or_target = EXIT_FN_CURRENT_VAL
+							      >
+							      >	                memset (&error_info, 0, sizeof(error_info));
+							      >	                error_info.error_msg = (char *)malloc(500);
+							      >	                error_info.max_length = 500; /* Including nul
+							      >
+							      >	                call_callback (FETCH_CURRENT_RECORD_WITH_LOCK
+							      >	                if (result_code != EXIT_FN_RET_OK &&
+							      >	                    result_code != EXIT_FN_RET_NOT_SUPPORTED)
+							      >	                {
+							      >	                    if (result_code == EXIT_FN_RET_FETCH_ERRO
+							      >	                        output_msg ("SQL error (%ld, %s) fetc
+							      >	                                    error_info.error_num, err
+							      >	                    else
+							      >	                        output_msg ("Error (%hd) fetching cur
+							      >
+							      >	                    free (record);
+							      >	                    free (record_buffer);
+							      >	                    free (ascii_record_buffer);
+							      >	                    *exit_call_result = EXIT_ABEND_VAL;
+							      >	                    free (error_info.error_msg);
+							      >	                    return;
+							      >	                }
+							      >
+							      >	                free (error_info.error_msg);
+							      >
+							      >	                if (result_code == EXIT_FN_RET_OK)
+							      >	                {
+							      >	                    result_code = display_record (EXIT_FN_CUR
+							      >	                                                  EXIT_FN_INT
+							      >	                    if (result_code != EXIT_FN_RET_OK)
+							      >	                    {
+							      >	                        output_msg ("Error (%hd) displaying c
+							      >	                        free (record);
+							      >	                        free (record_buffer);
+							      >	                        free (ascii_record_buffer);
+							      >	                        *exit_call_result = EXIT_ABEND_VAL;
+							      >	                        return;
+							      >	                    }
+							      >	                }
+							      >	            }
+							      >
+							      >	            /************************************************
+							      >	            /* Perform example record transformations here. *
+							      >	            /************************************************
+							      >
+							      >	            /* Get target table name */
+							      >	            memset (&env_value, 0, sizeof(env_value_def));
+							      >	            env_value.source_or_target = EXIT_FN_TARGET_VAL;
+							      >	            env_value.buffer = (char *)malloc(500);
+							      >	            env_value.max_length = 500;
+							      >
+							      >	            call_callback (GET_TABLE_NAME_ONLY, &env_value, &
+							      >	            if (result_code != EXIT_FN_RET_OK)
+							      >	            {
+							      >	                output_msg ("Error (%hd) retrieving table nam
+							      >	                free (env_value.buffer);
+							      >	                free (record);
+							      >	                free (record_buffer);
+							      >	                free (ascii_record_buffer);
+							      >	                *exit_call_result = EXIT_ABEND_VAL;
+							      >	                return;
+							      >	            }
+							      >	            
+							      >	            tbl_name = env_value.buffer;
+							      >
+							      >	            if (!strcmp (tbl_name, "TCUSTMER") || 
+							      >	                !strcmp (tbl_name, "TCUSTORD"))
+							      >	            {
+							      >	                /* Get the customer name */
+							      >	                memset (&column, 0, sizeof(column_def));
+							      >	                if (record->mapped)
+							      >	                    column.source_or_target = EXIT_FN_TARGET_
+							      >	                else
+							      >	                    column.source_or_target = EXIT_FN_SOURCE_
+							      >	                column.column_value_mode = EXIT_FN_ASCII_FORM
+							      >	                column.column_value = (char*)malloc(4000);
+							      >	                column.max_value_length = 4000;
+							      >	                column.column_name = column_name_buf;
+							      >
+							      >	                strcpy (column.column_name, "CUST_CODE");
+							      >
+							      >	                call_callback (GET_COLUMN_VALUE_FROM_NAME, &c
+							      >	                if (result_code != EXIT_FN_RET_OK &&
+							      >	                    result_code != EXIT_FN_RET_COLUMN_NOT_FOU
+							      >	                {
+							      >	                    output_msg ("Error (%hd) retrieving colum
+							      >	                                 result_code);
+							      >	                    free (env_value.buffer);
+							      >	                    free (column.column_value);
+							      >	                    free (record);
+							      >	                    free (record_buffer);
+							      >	                    free (ascii_record_buffer);
+							      >	                    *exit_call_result = EXIT_ABEND_VAL;
+							      >	                    return;
+							      >	                }
+							      >
+							      >	                /* Let's modify the record if the customer is
+							      >	                if (!memcmp (column.column_value, "WILL", col
+							      >	                {
+							      >	                    /* Change customer "WILL" to customer "JI
+							      >	                       (TCUSTMER and TCUSTORD). */
+							      >	                    strcpy (column.column_value, "JILL");
+							      >	                    column.actual_value_length = (unsigned sh
+							      >
+							      >	                    call_callback (SET_COLUMN_VALUE_BY_NAME, 
+							      >	                    if (result_code != EXIT_FN_RET_OK)
+							      >	                    {
+							      >	                        output_msg ("Error (%hd) setting colu
+							      >	                        free (env_value.buffer);
+							      >	                        free (column.column_value);
+							      >	                        free (record);
+							      >	                        free (record_buffer);
+							      >	                        free (ascii_record_buffer);
+							      >	                        *exit_call_result = EXIT_ABEND_VAL;
+							      >	                        return;
+							      >	                    }
+							      >
+							      >	                    /* Change the product amount to 100 on Ji
+							      >	                    if (!strcmp (tbl_name, "TCUSTORD"))
+							      >	                    {
+							      >	                        strcpy (column.column_name, "PRODUCT_
+							      >	                        strcpy (column.column_value, "100");
+							      >	                        column.actual_value_length = (unsigne
+							      >
+							      >	                        call_callback (SET_COLUMN_VALUE_BY_NA
+							      >	                        if (result_code != EXIT_FN_RET_OK)
+							      >	                        {
+							      >	                            output_msg ("Error (%hd) setting 
+							      >	                            free (env_value.buffer);
+							      >	                            free (column.column_value);
+							      >	                            free (record);
+							      >	                            free (record_buffer);
+							      >	                            free (ascii_record_buffer);
+							      >	                            *exit_call_result = EXIT_ABEND_VA
+							      >	                            return;
+							      >	                        }
+							      >	                    }
+							      >	                }
+							      >
+							      >	                free (column.column_value);
+							      >	            }
+							      >
+							      >	            free (env_value.buffer);
+            break;						            break;
+
+        case EXIT_CALL_DISCARD_ASCII_RECORD:			        case EXIT_CALL_DISCARD_ASCII_RECORD:
+            output_msg ("\nUser exit: EXIT_CALL_DISCARD_ASCII	            output_msg ("\nUser exit: EXIT_CALL_DISCARD_ASCII
+
+            memset (&error_info, 0, sizeof(error_info));	            memset (&error_info, 0, sizeof(error_info));
+            error_info.error_msg = (char *)malloc(500);		            error_info.error_msg = (char *)malloc(500);
+            error_info.max_length = 500; /* Including null te	            error_info.max_length = 500; /* Including null te
+
+            call_callback (GET_ERROR_INFO, &error_info, &resu	            call_callback (GET_ERROR_INFO, &error_info, &resu
+            if (result_code != EXIT_FN_RET_OK)			            if (result_code != EXIT_FN_RET_OK)
+            {							            {
+                output_msg ("Error (%hd) retrieving error inf	                output_msg ("Error (%hd) retrieving error inf
+                free (error_info.error_msg);			                free (error_info.error_msg);
+                free (record);					                free (record);
+                free (record_buffer);				                free (record_buffer);
+                free (ascii_record_buffer);			                free (ascii_record_buffer);
+                *exit_call_result = EXIT_ABEND_VAL;		                *exit_call_result = EXIT_ABEND_VAL;
+                return;						                return;
+            }							            }
+
+            output_msg ("Error information:\n"			            output_msg ("Error information:\n"
+                        "Error number: %ld.\n"			                        "Error number: %ld.\n"
+                        "Error message: %s.\n\n",		                        "Error message: %s.\n\n",
+                        error_info.error_num,			                        error_info.error_num,
+                        error_info.error_msg);			                        error_info.error_msg);
+
+            free (error_info.error_msg);			            free (error_info.error_msg);
+
+            memset (record, 0, sizeof(record));			            memset (record, 0, sizeof(record));
+            record->source_or_target = EXIT_FN_SOURCE_VAL;	            record->source_or_target = EXIT_FN_SOURCE_VAL;
+            record->buffer = (char *)ascii_record_buffer;	            record->buffer = (char *)ascii_record_buffer;
+
+            call_callback (GET_RECORD_BUFFER, record, &result	            call_callback (GET_RECORD_BUFFER, record, &result
+            if (result_code != EXIT_FN_RET_OK)			            if (result_code != EXIT_FN_RET_OK)
+            {							            {
+                output_msg ("Error (%hd) retrieving ASCII rec	                output_msg ("Error (%hd) retrieving ASCII rec
+                free (record);					                free (record);
+                free (record_buffer);				                free (record_buffer);
+                free (ascii_record_buffer);			                free (ascii_record_buffer);
+                *exit_call_result = EXIT_ABEND_VAL;		                *exit_call_result = EXIT_ABEND_VAL;
+                return;						                return;
+            }							            }
+
+            output_msg ("ASCII discard record: %s.\n", record	            output_msg ("ASCII discard record: %s.\n", record
+            break;						            break;
+
+        case EXIT_CALL_DISCARD_RECORD:				        case EXIT_CALL_DISCARD_RECORD:
+            output_msg ("\nUser exit: EXIT_CALL_DISCARD_RECOR	            output_msg ("\nUser exit: EXIT_CALL_DISCARD_RECOR
+
+            memset (&error_info, 0, sizeof(error_info));	            memset (&error_info, 0, sizeof(error_info));
+            error_info.error_msg = (char *)malloc(500);		            error_info.error_msg = (char *)malloc(500);
+            error_info.max_length = 500; /* Including null te	            error_info.max_length = 500; /* Including null te
+
+            call_callback (GET_ERROR_INFO, &error_info, &resu	            call_callback (GET_ERROR_INFO, &error_info, &resu
+            if (result_code != EXIT_FN_RET_OK)			            if (result_code != EXIT_FN_RET_OK)
+            {							            {
+                output_msg ("Error (%hd) retrieving error inf	                output_msg ("Error (%hd) retrieving error inf
+                free (error_info.error_msg);			                free (error_info.error_msg);
+                free (record);					                free (record);
+                free (record_buffer);				                free (record_buffer);
+                free (ascii_record_buffer);			                free (ascii_record_buffer);
+                *exit_call_result = EXIT_ABEND_VAL;		                *exit_call_result = EXIT_ABEND_VAL;
+                return;						                return;
+            }							            }
+
+            output_msg ("Error information:\n"			            output_msg ("Error information:\n"
+                        "Error number: %ld.\n"			                        "Error number: %ld.\n"
+                        "Error message: %s.\n\n",		                        "Error message: %s.\n\n",
+                        error_info.error_num,			                        error_info.error_num,
+                        error_info.error_msg);			                        error_info.error_msg);
+
+            free (error_info.error_msg);			            free (error_info.error_msg);
+
+            memset (record, 0, sizeof(record));			            memset (record, 0, sizeof(record));
+            record->source_or_target = EXIT_FN_SOURCE_VAL;	            record->source_or_target = EXIT_FN_SOURCE_VAL;
+            record->buffer = (char *) record_buffer;		            record->buffer = (char *) record_buffer;
+
+            call_callback (GET_RECORD_BUFFER, record, &result	            call_callback (GET_RECORD_BUFFER, record, &result
+            if (result_code != EXIT_FN_RET_OK)			            if (result_code != EXIT_FN_RET_OK)
+            {							            {
+                output_msg ("Error (%hd) retrieving ASCII rec	                output_msg ("Error (%hd) retrieving ASCII rec
+                free (record);					                free (record);
+                free (record_buffer);				                free (record_buffer);
+                free (ascii_record_buffer);			                free (ascii_record_buffer);
+                *exit_call_result = EXIT_ABEND_VAL;		                *exit_call_result = EXIT_ABEND_VAL;
+                return;						                return;
+            }							            }
+
+            result_code = display_record (EXIT_FN_SOURCE_VAL,	            result_code = display_record (EXIT_FN_SOURCE_VAL,
+                                          EXIT_FN_ASCII_FORMA	                                          EXIT_FN_ASCII_FORMA
+            if (result_code != EXIT_FN_RET_OK)			            if (result_code != EXIT_FN_RET_OK)
+            {							            {
+                output_msg ("Error (%hd) displaying source co	                output_msg ("Error (%hd) displaying source co
+                free (record);					                free (record);
+                free (record_buffer);				                free (record_buffer);
+                free (ascii_record_buffer);			                free (ascii_record_buffer);
+                *exit_call_result = EXIT_ABEND_VAL;		                *exit_call_result = EXIT_ABEND_VAL;
+                return;						                return;
+            }							            }
+
+            if (record->mapped) /* We have a target record */	            if (record->mapped) /* We have a target record */
+            {							            {
+                result_code = display_record (EXIT_FN_TARGET_	                result_code = display_record (EXIT_FN_TARGET_
+                                              EXIT_FN_ASCII_F	                                              EXIT_FN_ASCII_F
+                if (result_code != EXIT_FN_RET_OK)		                if (result_code != EXIT_FN_RET_OK)
+                {						                {
+                    output_msg ("Error (%hd) displaying targe	                    output_msg ("Error (%hd) displaying targe
+                    free (record);				                    free (record);
+                    free (record_buffer);			                    free (record_buffer);
+                    free (ascii_record_buffer);			                    free (ascii_record_buffer);
+                    *exit_call_result = EXIT_ABEND_VAL;		                    *exit_call_result = EXIT_ABEND_VAL;
+                    return;					                    return;
+                }						                }
+            }							            }
+            break;						            break;
+
+        case EXIT_CALL_EVENT_RECORD:				        case EXIT_CALL_EVENT_RECORD:
+            output_msg ("\nUser exit: EXIT_CALL_EVENT_RECORD.	            output_msg ("\nUser exit: EXIT_CALL_EVENT_RECORD.
+
+            /* allocate event object name storage */		            /* allocate event object name storage */
+            event_record.object_name     = (char*)malloc(300)	            event_record.object_name     = (char*)malloc(300)
+            event_record.max_name_length = 300;			            event_record.max_name_length = 300;
+
+            /* get event detail */				            /* get event detail */
+            call_callback(GET_EVENT_RECORD, &event_record, &r	            call_callback(GET_EVENT_RECORD, &event_record, &r
+
+            if (result_code != EXIT_FN_RET_OK)			            if (result_code != EXIT_FN_RET_OK)
+            {							            {
+                output_msg("Error (%hd) retrieving event reco	                output_msg("Error (%hd) retrieving event reco
+                free(event_record.object_name);			                free(event_record.object_name);
+                free(record);					                free(record);
+                free(record_buffer);				                free(record_buffer);
+                free(ascii_record_buffer);			                free(ascii_record_buffer);
+                *exit_call_result = EXIT_ABEND_VAL;		                *exit_call_result = EXIT_ABEND_VAL;
+                return;						                return;
+            }							            }
+
+            /* check if database metadata record event */	            /* check if database metadata record event */
+            if (event_record.event_id == EXIT_DATABASE_METADA	            if (event_record.event_id == EXIT_DATABASE_METADA
+            {							            {
+                /* new or updated database metadata available	                /* new or updated database metadata available
+                output_msg("\nDatabase (%s) metadata event re	                output_msg("\nDatabase (%s) metadata event re
+            }							            }
+            /* check if table metadata record event */		            /* check if table metadata record event */
+            else if (event_record.event_id == EXIT_TABLE_META	            else if (event_record.event_id == EXIT_TABLE_META
+            {							            {
+                /* new or updated table metadata available */	                /* new or updated table metadata available */
+                output_msg("\nTable (%s) metadata event recor	                output_msg("\nTable (%s) metadata event recor
+            }							            }
+            /* check if ref-table metadata record event */	            /* check if ref-table metadata record event */
+            else if (event_record.event_id == EXIT_REF_TABLE_	            else if (event_record.event_id == EXIT_REF_TABLE_
+            {							            {
+                /* new or updated table reference metadata av	                /* new or updated table reference metadata av
+                output_msg("\nTable reference (%s) metadata e	                output_msg("\nTable reference (%s) metadata e
+            }							            }
+            else						            else
+            {							            {
+                /* unsupported event identifier. should not h	                /* unsupported event identifier. should not h
+                output_msg("\nUnknown event identifier: %hd.\	                output_msg("\nUnknown event identifier: %hd.\
+            }							            }
+
+            free(event_record.object_name);			            free(event_record.object_name);
+
+            break;						            break;
+
+        case EXIT_CALL_FATAL_ERROR:				        case EXIT_CALL_FATAL_ERROR:
+            output_msg ("\nUser exit: EXIT_CALL_FATAL_ERROR.\	            output_msg ("\nUser exit: EXIT_CALL_FATAL_ERROR.\
+
+            memset (&error_info, 0, sizeof(error_info));	            memset (&error_info, 0, sizeof(error_info));
+            error_info.error_msg = (char *)malloc(500);		            error_info.error_msg = (char *)malloc(500);
+            error_info.max_length = 500; /* Including null te	            error_info.max_length = 500; /* Including null te
+
+            call_callback (GET_ERROR_INFO, &error_info, &resu	            call_callback (GET_ERROR_INFO, &error_info, &resu
+            if (result_code != EXIT_FN_RET_OK)			            if (result_code != EXIT_FN_RET_OK)
+            {							            {
+                output_msg ("Error (%hd) retrieving error inf	                output_msg ("Error (%hd) retrieving error inf
+                free (error_info.error_msg);			                free (error_info.error_msg);
+                free (record);					                free (record);
+                free (record_buffer);				                free (record_buffer);
+                free (ascii_record_buffer);			                free (ascii_record_buffer);
+                *exit_call_result = EXIT_ABEND_VAL;		                *exit_call_result = EXIT_ABEND_VAL;
+                return;						                return;
+            }							            }
+
+            output_msg ("Error information:\n"			            output_msg ("Error information:\n"
+                        "Error number: %ld.\n"			                        "Error number: %ld.\n"
+                        "Error message: %s.\n\n",		                        "Error message: %s.\n\n",
+                        error_info.error_num,			                        error_info.error_num,
+                        error_info.error_msg);			                        error_info.error_msg);
+
+            free (error_info.error_msg);			            free (error_info.error_msg);
+            close_callback();					            close_callback();
+            break;						            break;
+    }								    }
+
+    free (record);						    free (record);
+    free (record_buffer);					    free (record_buffer);
+    free (ascii_record_buffer);					    free (ascii_record_buffer);
+    *exit_call_result = EXIT_OK_VAL;				    *exit_call_result = EXIT_OK_VAL;
+    fflush (stdout);						    fflush (stdout);
+}							      \	}
+							      >

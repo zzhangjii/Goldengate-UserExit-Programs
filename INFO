@@ -1,0 +1,19 @@
+Basically we use CUSEREXIT in an extract, and it calls a custom exit routine in C that must take certain 
+exit parameters from GG while calling GG callback subroutines for retrieving record and application context 
+information & modifying the contents of data records.
+
+There are actually example C programs for user exits in the GG installation.  
+I have taken a look into the code, and they are pretty involved.  
+I would definitely need some help in understanding on where to get started on 
+converting a DDLOP into a token (and then presumably applied by GG to ADW in the replicat).  
+
+
+
+Other than conversion into a GG token, it may be also be possible to directly apply the DDLOP on ADW via OCI in the custom routine
+
+Sherman Lee [3:11 PM]
+https://docs.oracle.com/goldengate/c1221/gg-winux/GWUAD/customizing-oracle-goldengate-processing.htm#GWUAD608
+
+
+
+VM holding MySQL 5.7:  129.213.159.43
